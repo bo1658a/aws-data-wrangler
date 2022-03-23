@@ -48,8 +48,8 @@ def test_connection():
     wr.sqlserver.connect("aws-data-wrangler-sqlserver", timeout=10).close()
 
 
-def test_read_sql_query_simple(databases_parameters, sqlserver_con):
-    df = wr.sqlserver.read_sql_query("SELECT 1", con=sqlserver_con)
+def test_read_sql_query_simple(databases_parameters, oracle_con):
+    df = wr.sqlserver.read_sql_query("SELECT 1 FROM DUAL", con=oracle_con)
     assert df.shape == (1, 1)
 
 

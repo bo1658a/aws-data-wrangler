@@ -48,15 +48,24 @@ def _validate_connection(con: "cx_Oracle.Connection") -> None:
         )
 
 
-#def _get_table_identifier(schema: Optional[str], table: str) -> str:
-#    schema_str = f'"{schema}".' if schema else ""
-#    table_identifier = f'{schema_str}"{table}"'
-#    return table_identifier
+def _get_table_identifier(schema: Optional[str], table: str) -> str:
+    schema_str = f'"{schema}".' if schema else ""
+    table_identifier = f'{schema_str}"{table}"'
+    return table_identifier
 
 
 def _drop_table(cursor: "cx_Oracle.Cursor", schema: Optional[str], table: str) -> None:
     table_identifier = _get_table_identifier(schema, table)
-    sql = f"IF OBJECT_ID(N'{table_identifier}', N'U') IS NOT NULL DROP TABLE {table_identifier}"
+    sql = f"""
+BEGIN
+   EXECUTE IMMEDIATE 'DROP TABLE {table_identifier}';
+EXCEPTION
+   WHEN OTHERS THEN
+      IF SQLCODE != -942 THEN
+         RAISE;
+      END IF;
+END;
+"""
     _logger.debug("Drop table query:\n%s", sql)
     cursor.execute(sql)
 
@@ -85,14 +94,14 @@ def _create_table(
         df=df,
         index=index,
         dtype=dtype,
-        varchar_lengths_default="VARCHAR(MAX)",
+        varchar_lengths_default="CLOB",
         varchar_lengths=varchar_lengths,
         converter_func=_data_types.pyarrow2oracle,
     )
     cols_str: str = "".join([f"{k} {v},\n" for k, v in oracle_types.items()])[:-2]
     table_identifier = _get_table_identifier(schema, table)
     sql = (
-        f"IF OBJECT_ID(N'{table_identifier}', N'U') IS NULL BEGIN CREATE TABLE {table_identifier} (\n{cols_str}); END;"
+        f"CREATE TABLE {table_identifier} (\n{cols_str})"
     )
     _logger.debug("Create table query:\n%s", sql)
     cursor.execute(sql)
@@ -104,9 +113,8 @@ def connect(
     secret_id: Optional[str] = None,
     catalog_id: Optional[str] = None,
     dbname: Optional[str] = None,
-    odbc_driver_version: int = 17,
     boto3_session: Optional[boto3.Session] = None,
-    timeout: Optional[int] = 0,
+    call_timeout: Optional[int] = 0,
 ) -> "cx_Oracle.Connection":
     """Return a cx_Oracle connection from a Glue Catalog Connection.
 
@@ -169,15 +177,16 @@ def connect(
         raise exceptions.InvalidDatabaseType(
             f"Invalid connection type ({attrs.kind}. It must be an oracle connection.)"
         )
-    connection_str = (
-        f"DRIVER={{ODBC Driver {odbc_driver_version} for Oracle}};"
-        f"SERVER={attrs.host},{attrs.port};"
-        f"DATABASE={attrs.database};"
-        f"UID={attrs.user};"
-        f"PWD={attrs.password}"
-    )
 
-    return cx_Oracle.connect(connection_str, timeout=timeout)
+    connection_dsn = cx_Oracle.makedsn(attrs.host, attrs.port, service_name=attrs.database)
+    connection = cx_Oracle.connect(
+        user=attrs.user,
+        password=attrs.password,
+        dsn=connection_dsn,
+    )
+    # cx_Oracle.connect does not have a timeout attribute
+    connection.call_timeout = timeout
+    return connection
 
 
 @_check_for_cx_Oracle
